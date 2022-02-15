@@ -1,0 +1,79 @@
+version: 2
+jobs:
+  build-amd-docker-image:
+    docker:
+      - image: circleci/buildpack-deps:stretch
+    steps:
+      - setup_remote_docker
+      - attach_workspace:
+          at: ~/repo
+      - checkout
+      - run:
+          name: Support build cleaned gateway images
+          command: |
+            export AMD_FOLDER_NAME=${CIRCLE_PROJECT_REPONAME}-amd64
+            mkdir -p ~/repo/artifacts/${AMD_FOLDER_NAME}/gateway
+            cd ~/repo/artifacts/${AMD_FOLDER_NAME}/gateway
+            docker pull quay.io/bluecat/gateway:${CIRCLE_TAG}
+            python3 ~/repo/fromscratch.py quay.io/bluecat/gateway:${CIRCLE_TAG} > Dockerfile
+            docker build --build-arg IMAGE=quay.io/bluecat/gateway:${CIRCLE_TAG} --tag=gateway:${CIRCLE_TAG} -f Dockerfile .
+      - run:
+          name: Export image to tar file
+          command: |
+            export AMD_FOLDER_NAME=${CIRCLE_PROJECT_REPONAME}-amd64
+            mkdir -p ~/repo/artifacts/${AMD_FOLDER_NAME}/images
+            docker save -o ~/repo/artifacts/${AMD_FOLDER_NAME}/images/gateway.tar gateway:${CIRCLE_TAG}
+      - run:
+          name: Check and package
+          command: |
+            export AMD_FOLDER_NAME=${CIRCLE_PROJECT_REPONAME}-amd64
+            cd ~/repo/artifacts/
+            ls -la ${AMD_FOLDER_NAME}/images
+            tar -czvf ${AMD_FOLDER_NAME}.tar.gz ${AMD_FOLDER_NAME}
+      - run:
+          name: Move to release directory
+          command: |
+            mkdir -p ~/release/packages
+            export AMD_FOLDER_NAME=${CIRCLE_PROJECT_REPONAME}-amd64
+            cp -rf ~/repo/artifacts/${AMD_FOLDER_NAME}.tar.gz ~/release/packages/
+      - persist_to_workspace:
+          root: ~/release
+          paths:
+            - packages
+  release:
+    docker:
+      - image: cibuilds/github:0.13
+    steps:
+      - attach_workspace:
+          at: ~/release
+      - run:
+          name: Check packages before release
+          command: |
+            ls -la ~/release/packages
+      - run:
+          name: Publish Release on GitHub
+          command: |
+            echo "Release ${CIRCLE_PROJECT_REPONAME}:${CIRCLE_TAG}"
+            echo $CIRCLE_PROJECT_USERNAME
+            echo $CIRCLE_PROJECT_REPONAME
+            echo ${CIRCLE_TAG}
+            ghr -debug -t ${ACCESS_TOKEN} -u ${CIRCLE_PROJECT_USERNAME} -r ${CIRCLE_PROJECT_REPONAME} -c ${CIRCLE_SHA1} -delete ${CIRCLE_TAG} ~/release/packages/
+
+workflows:
+  version: 2
+  build-and-release:
+    jobs:
+      - build-amd-docker-image:
+          filters:
+            tags:
+              only: /^2.*/
+            branches:
+              ignore: /.*/
+      - release:
+          requires:
+            - build-amd-docker-image
+          filters:
+            tags:
+              only: /^2.*/
+            branches:
+              ignore: /.*/
